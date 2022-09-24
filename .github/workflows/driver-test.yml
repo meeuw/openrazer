@@ -1,0 +1,10 @@
+on:
+  push:
+    branches:
+      - driver-test
+
+jobs:
+  driver-test:
+    runs-on: ghcr.io/meeuw/openrazer-dockerimage:main
+    steps:
+      - run: echo "hello world"
