@@ -1,0 +1,94 @@
+name: Create user mode linux kernel for testing driver
+on:
+  push:
+    branches:
+      - master
+jobs:
+  build-uml:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v3
+      - name: Cache UML
+        id: cache-uml-5-19-7
+        uses: actions/cache@v3
+        with:
+          path: linux-5.19.7
+          key: linux-5.19.7
+      - name: Cache kernel source
+        id: cache-kernel-source-5-19-7
+        uses: actions/cache@v3
+        with:
+          path: linux-5.19.7.tar.xz
+          key: linux-5.19.7.tar.xz
+      - name: Install packages
+        shell: bash
+        run: |
+          sudo apt-get install -y \
+            python3-daemonize \
+            python3-dbus \
+            python3-gi \
+            python3-notify2 \
+            python3-numpy \
+            python3-pyudev \
+            python3-setproctitle \
+            dbus \
+      - name: Download kernel source
+        if: steps.cache-kernel-source-5-19-7.outputs.cache-hit != 'true'
+        shell: bash
+        run: curl -o linux-5.19.7.tar.xz https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.19.7.tar.xz
+      - name: Extract kernel source
+        shell: bash
+        run: tar -xf linux-5.19.7.tar.xz
+      - name: Configure kernel
+        if: steps.cache-kernel-config-5-19-7.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd linux-5.19.7
+          make defconfig ARCH=um
+          echo CONFIG_EXPERT=y >> .config
+          echo CONFIG_NO_IOMEM=n >> .config
+          # OpenRazer
+          echo CONFIG_USB=y >> .config
+          # Razer Emulator
+          echo CONFIG_USB_GADGET=y >> .config
+          echo CONFIG_USB_DUMMY_HCD=y >> .config
+          echo CONFIG_USB_CONFIGFS=y >> .config
+          echo CONFIG_USB_CONFIGFS_F_FS=y >> .config
+          # GCOV
+          echo CONFIG_DEBUG_FS=y >> .config
+          echo CONFIG_GCOV_KERNEL=y >> .config
+
+          make oldconfig ARCH=um
+          make prepare ARCH=um
+      - name: Build UML
+        if: steps.cache-kernel-config-5-19-7.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd linux-5.19.7
+          make -j4 ARCH=um
+          cp linux ../um-linux-5.19.7
+      - name: Build openrazer modules
+        run: |
+          echo GCOV_PROFILE := y >> driver/Makefile
+          make driver KERNELDIR=linux-5.19.7 ARCH=um
+          sudo make python_library_install daemon_install udev_install
+          sudo mv /usr/lib/python3.8/site-packages/* /lib/python3/dist-packages
+      - name: Install razer-emulator
+        run: pipx install git+https://github.com/meeuw/razer-emulator.git@4cf9cf7da08a7381bcee867fa9e6ee935f01e386
+      - name: Run UML
+        shell: bash
+        run: |
+          ./um-linux-5.19.7 root=/dev/root rootfstype=hostfs rootflags=/ rw mem=2G init=$(pwd)/init.sh || :
+          ls -la /tmp
+          #grep ^ /tmp/output-*
+          cat /tmp/output-functional-tests
+          cp -v /tmp/*.gcno /tmp/*.gcda driver
+          sudo chown -R runner .
+      - uses: codecov/codecov-action@v3
+        with:
+          flags: unittests # optional
+          fail_ci_if_error: true # optional (default = false)
+          verbose: true # optional (default = false)
+          gcov: true
+          gcov_include: /home/runner/work/openrazer/openrazer/driver/razerkbd_driver.c
